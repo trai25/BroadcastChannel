@@ -1,25 +1,69 @@
-# Repository Guidelines
+# Repository Guide for Coding Agents
 
-## Project Structure & Modules
+## Sources
 
-The codebase is built on Astro 4. Routes live in `src/pages`, shared UI in `src/components`, layouts in `src/layouts`, and Telegram/RSS logic in `src/lib`. Styles and static assets sit under `src/styles` and `src/assets`. Everything placed in `public/` is served as-is by Astro. Helper utilities and automation scripts belong to `api/` and `scripts/`. Build artifacts are emitted to `dist/`; always clean up previous outputs before deploying to avoid stale files.
+- Treat this file as the maintained repo guide. `CLAUDE.md` is a symlink to this file for Claude Code compatibility.
+- No repo-local `opencode.json`, `.opencode/`, `.cursor/rules/`, `.cursorrules`, or `.github/copilot-instructions.md` is present.
+- For any visible UI/design change, read `DESIGN.md` first; implementation tokens live in `src/styles/app/**` and `src/styles/content/**`.
+- Theme provenance and third-party acknowledgements are maintained in `NOTICE.md`.
 
-## Build, Test & Dev Commands
+## Theme provenance
 
-Always use `pnpm`. Run `pnpm install` to install dependencies and register simple-git-hooks when `.git` exists. `pnpm dev`/`pnpm start` launch hot reload on port 4321, `pnpm build` creates the deployable SSR bundle, `pnpm preview` validates the build in the production-like adapter, and `pnpm lint` / `pnpm lint:fix` check or auto-fix ESLint issues.
+- Base is the default Bear-compatible theme; bundled optional overrides live under `public/themes/`.
+- Every newly bundled theme must add or update its own `NOTICE.md` entry in the same change, including the upstream project URL, author or copyright holder, license and license URL, and whether the implementation is inspired by or adapted from the upstream work.
+- Also update the README theme credits when a bundled theme is added or its provenance changes.
+- Do not copy upstream theme code unless its license compatibility and notice requirements have been reviewed. Distinguish visual inspiration from source adaptation accurately.
 
-## Code Style & Naming
+## Stack and commands
 
-ESLint relies on `@antfu/eslint-config`, `eslint-plugin-astro`, and `eslint-plugin-format`, using two-space indents, single quotes, and automatic trailing commas per syntax. Name Astro components as `PascalCase.astro`, scripts and helpers as `kebab-case.ts`, environment variables with uppercase snake case, and keep route paths kebab-cased. Make sure `pnpm lint` is clean before committing, and add brief clarifying comments when Telegram API or RSS handling might confuse readers.
+- Runtime/tooling: Node `v22`, `pnpm@11.6.0`, Astro `^6.4.6` SSR, Tailwind CSS v4 via `@tailwindcss/vite`, ESLint `^10.4.1` with Antfu + Astro + formatter rules.
+- Install/dev/build: `pnpm install`, `pnpm dev` or `pnpm start` (`astro dev`), `pnpm build`, `pnpm preview`.
+- Local checks: `pnpm lint`, `pnpm typecheck`, and `pnpm test`; use `pnpm lint:fix` for auto-fix, `pnpm eslint <path>` for focused lint, and `pnpm vitest run <test-file>` for a focused test.
+- `postinstall` installs `simple-git-hooks` when `.git` exists; pre-commit runs `lint-staged` with `eslint --fix`.
+- CI does not validate app behavior: `docker.yml` only builds/pushes the GHCR image, and `sync.yml` only syncs forks from upstream.
 
-## Testing Guidance
+## Validation shortcuts
 
-There is no unit-test framework yet. Minimum validation is passing ESLint plus a manual `pnpm preview`. When adding modules, prefer injectable pure functions inside `src/lib` to ease future Vitest adoption. List covered user paths in the PR description (e.g., "channel without TAG" or "RSS Beautify disabled") and mention the commands you ran.
+- Small code change: `pnpm eslint <changed-file>`, `pnpm typecheck`, and `pnpm test`; run `pnpm lint` if scope widened.
+- UI or route change: `pnpm lint`, `pnpm build`, then preview/manual check.
+- Feed/SEO/sitemap changes: manually verify `/rss.xml`, `/rss.json`, `/sitemap.xml`, and relevant canonical/meta output in preview.
+- Telegram parsing or proxy changes: verify home, one `/posts/[id]` page, RSS output, and a `/static/...` asset path.
+- Build config or adapter changes must finish with `pnpm build`.
 
-## PR & Commit Guidelines
+## Architecture notes
 
-Follow Conventional Commits (`feat:`, `fix:`, `refactor:`, etc.) and explain the reason and impact in the body. Each PR should include: 1) background or linked issue, 2) notes on config/env changes, 3) local validation output or screenshots, and 4) UI screenshots from `pnpm preview` when relevant. Keep PR scope focused; split into multiple commits if it simplifies rollbacks.
+- `src/pages/` contains Astro pages and API-style routes; `src/pages/index.astro` is intentionally thin and calls `getChannelInfo()`.
+- `src/layouts/BaseLayout.astro` wires global CSS, `astro-seo`, the site header/navigation, RSS links, `HEADER_INJECT`, and `FOOTER_INJECT`.
+- `src/middleware.ts` sets `SITE_URL`/`RSS_URL` locals, handles legacy `#tag` search rewrites, and adds speculation/cache headers.
+- Telegram fetching/parsing belongs in `src/lib/telegram/**`; request caching uses `ocache` with 5 min max age, SWR enabled, and 1 hour stale max age.
+- Shared env helpers are in `src/lib/env.ts`; runtime `process.env` wins over build-time `import.meta.env`, and they do not read `Astro.locals.runtime.env`.
+- Static proxy logic is shared in `src/lib/static-proxy.ts`; both Astro route `src/pages/static/[...url].ts` and Vercel Edge Function `api/static/index.ts` use it, with `/static/:path*` rewritten by `vercel.json`.
+- Do not broaden the static proxy target whitelist unless the task explicitly changes the security model.
+- Keep shared domain interfaces in `src/types.ts`; there are no TS path aliases, so use relative imports.
 
-## Security & Config Notes
+## Env and deployment gotchas
 
-Deployments depend on `.env` settings such as `CHANNEL`, `LOCALE`, Sentry credentials, and social account URLs. Never commit real tokens—use `.env.example` or platform variables (Vercel/Cloudflare/etc.). To try different Telegram proxies, copy `.env` to `.env.local`; Astro will load it during `astro dev`. Cloudflare/Netlify/Vercel Node adapters live in `astro.config.mjs`, so confirm the target platform supports SSR before changing them.
+- `CHANNEL` is required server-side; missing it throws during Telegram fetch.
+- `TELEGRAM_HOST` defaults in code to `telegram.me`; `.env.example` uses `telegram.dog` as an override example.
+- `STATIC_PROXY` defaults to `/static/` only when unset; set it to an empty string for direct Telegram asset URLs.
+- `astro.config.mjs` selects adapters for Vercel, Cloudflare Workers, Netlify, Node standalone, and EdgeOne; `SERVER_ADAPTER` overrides auto-detection, and Cloudflare Pages is explicitly rejected.
+- EdgeOne is detected from std-env's `edgeone_pages` provider or platform-provided `EDGEONE_PROJECT_ID`/`EO_MAKERS`; `DOCKER=true` changes Vite SSR `noExternal` behavior.
+- If env behavior changes, update `.env.example` and README docs together.
+
+## Code and content conventions
+
+- Server-rendered HTML is the default; keep browser JS near zero. Telegram comments are the deliberate exception.
+- API-style routes must return `Response`/`Response.json`, not Express-like objects.
+- Follow ESLint formatting: 2 spaces, LF, UTF-8, single quotes, usually no semicolons; let `pnpm lint:fix` settle import order.
+- Preserve local naming: Astro components and layouts use `PascalCase.astro`; pages follow Astro route syntax.
+- External Telegram HTML must be sanitized via `src/lib/sanitize.ts` before `set:html`; config injections in `BaseLayout.astro` are the only intentional raw HTML path.
+- Design changes should preserve the content-first Base contract from `DESIGN.md`; Sepia is an optional warm-paper override, not the default. Avoid card-heavy redesigns unless explicitly requested.
+
+## Cloned Dependency Source
+
+Read-only dependency source repositories are available under
+`.slim/clonedeps/repos/` for inspection. Do not edit these clones.
+
+- `.slim/clonedeps/repos/HermanMartinus__bearblog/` - `HermanMartinus/bearblog` at `a6cf650886d11461dd1839d02020ca0aee0fee67`; reference for the visitor DOM and default Bear theme contract.
+- `.slim/clonedeps/repos/panr__hugo-theme-terminal/` - `panr/hugo-theme-terminal` at `4acd067c48195ac503541ba75f9259c7158d3792`; reference for Terminal CSS and template structure.
+- `.slim/clonedeps/repos/miantiao-me__astro-aria/` - `miantiao-me/astro-aria` at `15c6eb8143ac55f9ba8d925b43f973ceef046980`; reference for Aria styling and Astro component composition.
